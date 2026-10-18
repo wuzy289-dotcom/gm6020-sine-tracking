@@ -1,0 +1,22 @@
+# 构建产物
+build/
+Debug/
+Release/
+*.elf
+*.bin
+*.hex
+*.map
+*.su
+
+# 编辑器
+.vscode/
+.idea/
+*.code-workspace
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 采集数据(体积大, 需要时再单独提交)
+data/
