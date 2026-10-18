@@ -1,4 +1,4 @@
-/**
+﻿/**
   ******************************************************************************
   * @file    ControlTask.cpp
   * @brief   GM6020 正弦跟随作业主逻辑
@@ -72,11 +72,19 @@ constexpr float kPosSpdLimit = 20.0f;     // 位置环输出(速度给定)限幅
 constexpr bool  kCurrentMode = true;
 constexpr float kOutLimit    = 3000.0f;   // 输出限幅, 电流单位(3000 ≈ 0.55A)
 // 速度前馈: 空载维持 100rpm 只需约 0.05A, 折合约 3 个电流单位/rpm
-constexpr float kCurPerRpm   = 3.0f;
+constexpr float kCurPerRpm   = 2.5f;
+// 速度反馈一阶低通(时间常数 24ms): 电机回传的转速是整数 rpm, 且 GM6020 10 对极
+// 在 100rpm 时本身就有 16.7Hz 的齿槽/换相转矩脉动, 直接喂进 PID 会让输出跟着抖
+constexpr float kFdbAlpha    = 0.012f;
+// 摩擦前馈: 静摩擦主要在低速段, 所以做成随速度衰减
+// (|w_ref| >= 50rpm 时只剩高速段的库仑摩擦)
+constexpr float kFricLow     = 500.0f;   // 零速附近, 电流单位(≈0.033A)
+constexpr float kFricHigh    = 60.0f;   // 高速段(≈0.022A)
 
 // PID 初值(电流模式下整定: 电流→转矩→加速度, 被控对象近似积分环节)
-constexpr float kSpdKp = 10.0f, kSpdKi = 120.0f, kSpdKd = 0.0f;
-constexpr float kPosKp = 8.0f,  kPosKi = 0.0f,   kPosKd = 0.0f;
+// Kp 给刚度, Ki 用来吃掉摩擦造成的稳态误差; 再大就会去追电机的齿槽纹波
+constexpr float kSpdKp = 20.0f, kSpdKi = 2.0f, kSpdKd = 1.0f;
+constexpr float kPosKp = 15.0f,  kPosKi = 0.0f,   kPosKd = 0.0f;
 
 constexpr uint32_t kCanTimeoutMs   = 100;   // 超过 100ms 没反馈判定掉线
 constexpr uint16_t kTelemetryDiv   = 2;     // 每 2 个控制周期上报一次 = 500Hz
@@ -99,6 +107,7 @@ volatile bool     g_motor_seen  = false;  // 是否收到过反馈
 bool  g_mode_position = false;            // false=速度模式 true=位置模式
 float g_t             = 0.0f;             // 进入当前模式后的时间(s)
 float g_theta0        = 0.0f;             // 进入位置模式时的角度(rad)
+float g_w_filt        = 0.0f;             // 低通后的速度反馈(rpm)
 uint16_t g_tele_div    = 0;
 uint16_t g_key_hold_ms = 0;
 uint8_t  g_tx_idx      = 0;
@@ -264,6 +273,7 @@ void SwitchMode(bool position_mode) {
     g_t      = 0.0f;
     g_theta0 = g_motor.angle();    // 位置模式以当前角度为中心, 避免上电跳变
     g_dbg_ref = 0.0f;
+    g_w_filt  = 0.0f;
     g_spd_pid.reset();
     g_pos_pid.reset();
 }
@@ -298,6 +308,21 @@ void HandleKey(void) {
 // ---------------------------------------------------------------------------
 // 1kHz 主控制
 // ---------------------------------------------------------------------------
+// 摩擦前馈: 用平滑符号函数表示给定方向, 给定一转正/转负就给对应方向的电流
+inline float FrictionFeedforward(float w_ref_rpm) {
+    float dir = w_ref_rpm / 1.0f;               // ±1rpm 过渡带: 斜坡而非台阶
+    if (dir >  1.0f) dir =  1.0f;
+    if (dir < -1.0f) dir = -1.0f;
+
+    float a = (w_ref_rpm < 0.0f ? -w_ref_rpm : w_ref_rpm) / 25.0f;
+    if (a > 1.0f) a = 1.0f;
+
+    const float mag = cfg::kFricLow - (cfg::kFricLow - cfg::kFricHigh) * a;
+    return mag * dir;
+}
+
+// 过零清积分的逻辑已移除（实测会扰动过零那一拍，且 Ki 很小时收益不明显）
+
 void RunControl(void) {
     const uint32_t now    = HAL_GetTick();
     const bool     online = g_motor_seen && ((now - g_last_rx_ms) < cfg::kCanTimeoutMs);
@@ -315,12 +340,14 @@ void RunControl(void) {
                                     : static_cast<float>(g_motor.velRpm());
         Led(false, false, (now % 500u) < 250u);
     } else if (!g_mode_position) {
-        // ---- 速度环: 给定 rpm 正弦, 前馈 + PI, 输出即电压 ----
+        // ---- 速度环: 给定 rpm 正弦, 前馈 + PI, 输出即电流 ----
         g_t += cfg::kLoopDt;
         const float w_ref = cfg::kSpdAmpRpm * ramp * std::sin(kTwoPi * cfg::kSpdFreqHz * g_t);
-        const float w_fb  = static_cast<float>(g_motor.velRpm());
+        g_w_filt += cfg::kFdbAlpha * (static_cast<float>(g_motor.velRpm()) - g_w_filt);
+        const float w_fb = g_w_filt;
 
-        u = cfg::kCurPerRpm * w_ref + g_spd_pid.calc(w_ref, w_fb);
+        u = cfg::kCurPerRpm * w_ref + FrictionFeedforward(w_ref)
+          + g_spd_pid.calc(w_ref, w_fb);
 
         g_dbg_ref = w_ref;
         g_dbg_fdb = w_fb;
@@ -340,8 +367,11 @@ void RunControl(void) {
         if (w_ref < -cfg::kPosSpdLimit) w_ref = -cfg::kPosSpdLimit;
 
         const float w_ref_rpm = w_ref * kRadToRpm;
-        const float w_fb_rpm  = static_cast<float>(g_motor.velRpm());
-        u = cfg::kCurPerRpm * w_ref_rpm + g_spd_pid.calc(w_ref_rpm, w_fb_rpm);
+        g_w_filt += cfg::kFdbAlpha * (static_cast<float>(g_motor.velRpm()) - g_w_filt);
+        const float w_fb_rpm  = g_w_filt;
+
+        u = cfg::kCurPerRpm * w_ref_rpm + FrictionFeedforward(w_ref_rpm)
+          + g_spd_pid.calc(w_ref_rpm, w_fb_rpm);
 
         g_dbg_ref = (th_ref - g_theta0) * kRadToDeg;   // 上报相对角度(度)
         g_dbg_fdb = (th_fb  - g_theta0) * kRadToDeg;
