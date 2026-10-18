@@ -78,7 +78,7 @@ if (g_task_tick != s_fed) {     // 1 kHz 任务心跳有推进
 1. 外壳丝印和实际串口是**反的**：丝印 `UART2` 的 4-pin 口才是 STM32 的 USART1（PA9/PB7），
    本工程用这个口；丝印 `UART1` 的 3-pin 口是 USART6。
 2. 电机拨码开关前三位是 ID：`001` → ID=1，对应反馈帧 `0x205`。若你的电机不是 ID=1，
-   改 `Core/Src/ControlTask.cpp` 里的 `cfg::kMotorId`。
+   改 `Tasks/ControlTask.cpp` 里的 `cfg::kMotorId`。
    第四位是 120 Ω 终端电阻，单电机短距离测试建议拨到 ON。
 
 ## 四、编译与烧录
@@ -159,10 +159,11 @@ python tools/plot_live.py --port COM5 --mode position --seconds 35 --out figures
 ## 八、目录结构
 
 ```
-Core/Src/ControlTask.cpp   1 kHz 调度、速度/位置环、串口上报、喂狗
-Core/Src/Gm6020.cpp        GM6020 CAN 协议（角度多圈累计、电压下发）
-Core/Src/Pid.cpp           位置式 PID（条件积分抗饱和 + 微分低通）
-Core/Inc/*.h               对应头文件
+Tasks/ControlTask.cpp      1 kHz 调度、速度/位置环、串口上报、喂狗
+Tasks/Gm6020.cpp           GM6020 CAN 协议（角度多圈累计、电压下发）
+Tasks/Pid.cpp              位置式 PID（条件积分抗饱和 + 微分低通）
+Tasks/*.h                  对应头文件
+Core/                      CubeMX 生成：main.c / can.c / tim.c / usart.c / iwdg.c ...
 tools/plot_live.py         串口实时曲线 + 截图
 tools/sim_control.py       离线闭环仿真（验证参数方向）
 tools/flash.ps1            一键编译 + 烧录（PowerShell 版）
@@ -170,11 +171,12 @@ tools/flash.cmd            同上，双击/直接运行的包装器
 figures/                   曲线图
 ```
 
-`Core/Src/*.c` 由 STM32CubeMX 从 `C_project.ioc` 生成，重新生成不会覆盖 `ControlTask.cpp` 等手写文件。
+手写代码全部放在 `Tasks/`，`Core/` 保持"CubeMX 专属"——重新生成代码不会碰到 `Tasks/`。
 
 构建用的是组里的 CMake 模板：它用 `GLOB_RECURSE` 自动收集 `Core/` 和 `Tasks/` 下的源文件，
-所以**新增 .c/.cpp 不需要再改 CMakeLists**，放进这两个目录即可（所在目录也会自动加入 include 路径）。
-自己的代码建议放到 `Tasks/` 下，让 `Core/` 保持"CubeMX 专属"。
+所以**新增 .c/.cpp 不需要改 CMakeLists**，放进这两个目录即可（所在目录会自动加入 include 路径）。
+但要注意 glob 是在**配置期**展开的：新增或删除了源码文件，必须重新跑一次 `cmake --preset Debug`
+（或删掉 `build/` 重新配置），否则新文件不会参与编译。
 
 ## 九、离线仿真预览（非实测）
 
