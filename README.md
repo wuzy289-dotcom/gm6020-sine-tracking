@@ -3,6 +3,8 @@
 用 RoboMaster 开发板 C 型驱动一台 GM6020 电机，分别跟随**正弦速度给定**与**正弦位置给定**，
 并用独立看门狗（IWDG）做运行保护。
 
+> 到基地现场的操作顺序见 [CHECKLIST.md](CHECKLIST.md)。
+
 - 控制频率：1 kHz（TIM6）
 - 通信：CAN1 @ 1 Mbps（电压控制模式，`0x1FF` / 反馈 `0x205`）
 - 上位机曲线：USART1 @ 256000，DMA 发送，每 2 ms 一帧 `ref,fdb`
