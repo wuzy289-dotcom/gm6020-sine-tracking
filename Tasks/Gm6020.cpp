@@ -8,7 +8,7 @@ constexpr float    kRawToAmp   = 3.0f / 16384.0f; // 反馈电流 ±16384 对应
 }
 
 Gm6020::Gm6020(uint8_t id)
-    : id_(id), voltage_(0),
+    : id_(id), voltage_(0), current_mode_(false),
       raw_angle_(0), raw_vel_rpm_(0), raw_current_(0), raw_temp_(0),
       full_turns_(0), last_raw_angle_(0) {}
 
@@ -17,7 +17,10 @@ uint32_t Gm6020::rxId() const {
 }
 
 uint32_t Gm6020::txId() const {
-    return (id_ <= 4) ? 0x1FFu : 0x2FFu;   // 电压控制帧
+    if (current_mode_) {
+        return (id_ <= 4) ? 0x1FEu : 0x2FEu;   // 电流控制帧
+    }
+    return (id_ <= 4) ? 0x1FFu : 0x2FFu;       // 电压控制帧
 }
 
 void Gm6020::decode(const uint8_t *data) {
@@ -66,11 +69,16 @@ int16_t Gm6020::voltage() const {
 }
 
 void Gm6020::encode(uint8_t *data) const {
-    // 电压控制帧数据布局:
-    //   0x1FF: ID 1->[0,1]  2->[2,3]  3->[4,5]  4->[6,7]
-    //   0x2FF: ID 5->[0,1]  6->[2,3]  7->[4,5]
+    // 控制帧数据布局(电压 0x1FF / 电流 0x1FE 相同):
+    //   0x1FF/0x1FE: ID 1->[0,1]  2->[2,3]  3->[4,5]  4->[6,7]
+    //   0x2FF/0x2FE: ID 5->[0,1]  6->[2,3]  7->[4,5]
+    const int16_t lim = current_mode_ ? 16384 : 25000;
+    int16_t v = voltage_;
+    if (v >  lim) v =  lim;
+    if (v < -lim) v = -lim;
+
     uint8_t index = (id_ <= 4) ? static_cast<uint8_t>((id_ - 1) * 2)
                                : static_cast<uint8_t>((id_ - 5) * 2);
-    data[index]     = static_cast<uint8_t>((voltage_ >> 8) & 0xFF);
-    data[index + 1] = static_cast<uint8_t>(voltage_ & 0xFF);
+    data[index]     = static_cast<uint8_t>((v >> 8) & 0xFF);
+    data[index + 1] = static_cast<uint8_t>(v & 0xFF);
 }

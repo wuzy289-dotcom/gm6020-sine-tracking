@@ -35,6 +35,10 @@ volatile float   g_dbg_ref  = 0.0f;   // 当前给定 (速度: rpm / 位置: 度
 volatile float   g_dbg_fdb  = 0.0f;   // 当前反馈 (同上)
 volatile float   g_dbg_u    = 0.0f;   // 当前输出电压给定 (-25000 ~ 25000)
 volatile uint8_t g_dbg_mode = 0u;     // 0 = 速度模式, 1 = 位置模式
+volatile uint32_t g_dbg_rx_cnt = 0u;  // 收到任意 CAN 帧的累计数(CAN1, 排查用)
+volatile uint32_t g_dbg_rx_id  = 0u;  // 最近一帧的标准 ID(CAN1)
+volatile uint32_t g_dbg_rx2_cnt = 0u; // CAN2 收到帧的计数(排查用)
+volatile uint32_t g_dbg_rx2_id  = 0u; // CAN2 最近一帧的 ID
 }
 
 namespace {
@@ -61,14 +65,17 @@ constexpr float kPosAmpDeg = 60.0f;
 constexpr float kPosFreqHz = 0.1f;
 
 constexpr float kRampInSec   = 1.5f;      // 起振渐变, 避免第一拍就满幅
-constexpr float kVoltLimit   = 15000.0f;  // 电压给定限幅 (25000 = 24V)
 constexpr float kPosSpdLimit = 20.0f;     // 位置环输出(速度给定)限幅 rad/s
 
-// 速度前馈: 25000 对应 24V, 空载 13.33rpm/V -> 每 rpm 约 78 个电压单位
-constexpr float kVoltPerRpm = 78.0f;
+// 这台 GM6020 在 RoboMaster Assistant 里被设成了电流控制模式:
+// 电压帧 0x1FF 会被忽略, 必须发电流帧 0x1FE (16384 = 3A)
+constexpr bool  kCurrentMode = true;
+constexpr float kOutLimit    = 3000.0f;   // 输出限幅, 电流单位(3000 ≈ 0.55A)
+// 速度前馈: 空载维持 100rpm 只需约 0.05A, 折合约 3 个电流单位/rpm
+constexpr float kCurPerRpm   = 3.0f;
 
-// PID 初值(整定从这里开始)
-constexpr float kSpdKp = 25.0f, kSpdKi = 150.0f, kSpdKd = 0.0f;
+// PID 初值(电流模式下整定: 电流→转矩→加速度, 被控对象近似积分环节)
+constexpr float kSpdKp = 10.0f, kSpdKi = 120.0f, kSpdKd = 0.0f;
 constexpr float kPosKp = 8.0f,  kPosKi = 0.0f,   kPosKd = 0.0f;
 
 constexpr uint32_t kCanTimeoutMs   = 100;   // 超过 100ms 没反馈判定掉线
@@ -82,7 +89,7 @@ constexpr uint16_t kKeyLongPressMs = 1500;  // 长按触发看门狗演示
 // 对象与状态
 // ---------------------------------------------------------------------------
 Gm6020 g_motor(cfg::kMotorId);
-Pid    g_spd_pid(cfg::kSpdKp, cfg::kSpdKi, cfg::kSpdKd,  cfg::kVoltLimit,  -cfg::kVoltLimit);
+Pid    g_spd_pid(cfg::kSpdKp, cfg::kSpdKi, cfg::kSpdKd,  cfg::kOutLimit,  -cfg::kOutLimit);
 Pid    g_pos_pid(cfg::kPosKp, cfg::kPosKi, cfg::kPosKd,  cfg::kPosSpdLimit, -cfg::kPosSpdLimit);
 
 volatile uint32_t g_task_tick   = 0;      // 1kHz 心跳
@@ -129,6 +136,13 @@ void GpioUserInit(void) {
 // CAN: 接收全部标准帧, 1kHz 下发一次电压
 // ---------------------------------------------------------------------------
 void CanUserInit(void) {
+    // 电机没上电时总线上没有第二个节点, 没有任何人给 ACK,
+    // 发送会一路 error -> bus-off。CubeMX 默认 AutoBusOff=DISABLE,
+    // 一旦 bus-off 就再也回不来(要按复位), 这里改成自动恢复:
+    // 电机上电后总线上出现 ACK, 控制器会自己退出 bus-off 恢复正常收发。
+    hcan1.Init.AutoBusOff = ENABLE;
+    if (HAL_CAN_Init(&hcan1) != HAL_OK) Error_Handler();
+
     CAN_FilterTypeDef f = {0};
     f.FilterBank           = 0;
     f.FilterMode           = CAN_FILTERMODE_IDMASK;
@@ -144,6 +158,23 @@ void CanUserInit(void) {
 
     if (HAL_CAN_Start(&hcan1) != HAL_OK) Error_Handler();
     if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) {
+        Error_Handler();
+    }
+
+    // ---- 诊断用: CAN2 也开一路"只收不发", 看电机到底挂在哪个口 ----
+    CAN_FilterTypeDef f2 = {0};
+    f2.FilterBank           = 14;                 // CAN2 只能用 14~27
+    f2.FilterMode           = CAN_FILTERMODE_IDMASK;
+    f2.FilterScale          = CAN_FILTERSCALE_32BIT;
+    f2.FilterIdHigh         = 0x0000;
+    f2.FilterIdLow          = 0x0000;
+    f2.FilterMaskIdHigh     = 0x0000;
+    f2.FilterMaskIdLow      = 0x0000;
+    f2.FilterFIFOAssignment = CAN_RX_FIFO1;       // 对应 CAN2_RX1 中断
+    f2.FilterActivation     = ENABLE;
+    if (HAL_CAN_ConfigFilter(&hcan2, &f2) != HAL_OK) Error_Handler();
+    if (HAL_CAN_Start(&hcan2) != HAL_OK) Error_Handler();
+    if (HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK) {
         Error_Handler();
     }
 }
@@ -289,7 +320,7 @@ void RunControl(void) {
         const float w_ref = cfg::kSpdAmpRpm * ramp * std::sin(kTwoPi * cfg::kSpdFreqHz * g_t);
         const float w_fb  = static_cast<float>(g_motor.velRpm());
 
-        u = cfg::kVoltPerRpm * w_ref + g_spd_pid.calc(w_ref, w_fb);
+        u = cfg::kCurPerRpm * w_ref + g_spd_pid.calc(w_ref, w_fb);
 
         g_dbg_ref = w_ref;
         g_dbg_fdb = w_fb;
@@ -310,16 +341,16 @@ void RunControl(void) {
 
         const float w_ref_rpm = w_ref * kRadToRpm;
         const float w_fb_rpm  = static_cast<float>(g_motor.velRpm());
-        u = cfg::kVoltPerRpm * w_ref_rpm + g_spd_pid.calc(w_ref_rpm, w_fb_rpm);
+        u = cfg::kCurPerRpm * w_ref_rpm + g_spd_pid.calc(w_ref_rpm, w_fb_rpm);
 
         g_dbg_ref = (th_ref - g_theta0) * kRadToDeg;   // 上报相对角度(度)
         g_dbg_fdb = (th_fb  - g_theta0) * kRadToDeg;
         Led(true, false, false);                       // 蓝灯常亮 = 位置模式
     }
 
-    // 输出总限幅, 再换算成 int16 电压给定
-    if (u >  cfg::kVoltLimit) u =  cfg::kVoltLimit;
-    if (u < -cfg::kVoltLimit) u = -cfg::kVoltLimit;
+    // 输出总限幅, 再换算成 int16 电流给定
+    if (u >  cfg::kOutLimit) u =  cfg::kOutLimit;
+    if (u < -cfg::kOutLimit) u = -cfg::kOutLimit;
 
     g_dbg_u    = u;                                     // 给 Ozone 看控制量
     g_dbg_mode = g_mode_position ? 1u : 0u;
@@ -337,7 +368,14 @@ void ControlTaskInit(void) {
     // 调试时单步暂停不让看门狗复位, 否则断点一停板子就重启
     __HAL_DBGMCU_FREEZE_IWDG();
 
+    // CubeMX 打开了 USART3(DBUS) 和 USART6 的中断, 但本工程只用 USART1。
+    // 这两个口没接设备时引脚悬空, 会不停产生溢出/帧错误中断,
+    // 它们的中断优先级是 0, 会不停抢占 1kHz 控制任务, 把主循环饿死。
+    HAL_NVIC_DisableIRQ(USART3_IRQn);
+    HAL_NVIC_DisableIRQ(USART6_IRQn);
+
     GpioUserInit();
+    g_motor.setCurrentMode(cfg::kCurrentMode);   // 电流模式 -> 发 0x1FE
     CanUserInit();
 
     g_last_rx_ms = HAL_GetTick();
@@ -378,7 +416,20 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
     CAN_RxHeaderTypeDef hdr;
     uint8_t             data[8];
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &hdr, data) != HAL_OK) return;
+    g_dbg_rx_cnt = g_dbg_rx_cnt + 1u;   // 先记账, 再看 ID 对不对
+    g_dbg_rx_id  = hdr.StdId;
     CanFeedbackCallback(hdr.StdId, data);
+}
+
+// CAN2 只做监听(诊断): 不参与控制, 只统计收到的帧和 ID
+void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+    CAN_RxHeaderTypeDef hdr;
+    uint8_t             data[8];
+    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &hdr, data) != HAL_OK) return;
+    if (hcan->Instance == CAN2) {
+        g_dbg_rx2_cnt = g_dbg_rx2_cnt + 1u;
+        g_dbg_rx2_id  = hdr.StdId;
+    }
 }
 
 } // extern "C"

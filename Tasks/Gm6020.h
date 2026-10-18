@@ -34,8 +34,13 @@ public:
     int16_t velRpm() const;  // 原始转速 (rpm)
 
     // ---- 控制 ----
-    void setVoltage(int16_t v);   // 电压给定 -25000~+25000
+    void setVoltage(int16_t v);   // 给定值, 范围由工作模式决定
     int16_t voltage() const;
+
+    // 工作模式: false = 电压控制(0x1FF, ±25000), true = 电流控制(0x1FE, ±16384)
+    // 部分队伍会在 RoboMaster Assistant 里把 GM6020 切成电流模式, 此时电压帧会被忽略
+    void setCurrentMode(bool on) { current_mode_ = on; }
+    bool currentMode() const { return current_mode_; }
 
     // ---- 协议编解码 ----
     void decode(const uint8_t *data);   // 解析 8 字节反馈帧
@@ -44,6 +49,7 @@ public:
 private:
     uint8_t  id_;
     int16_t  voltage_;
+    bool     current_mode_;   // true = 电流控制帧(0x1FE)
 
     uint16_t raw_angle_;      // 0~8191
     int16_t  raw_vel_rpm_;
