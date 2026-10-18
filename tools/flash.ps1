@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$elf  = Join-Path $root 'build/Debug/gm6020_sine.elf'
+$elf  = Join-Path $root 'build/gm6020_sine.elf'
 
 Push-Location $root
 try {

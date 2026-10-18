@@ -30,7 +30,7 @@
 
 ```bash
 cmake --build --preset Debug
-powershell -File tools/flash.ps1 -Interface jlink     # 基地用 J-Link；换下载器改 stlink / cmsis-dap
+tools\flash.cmd -Interface jlink     # 基地用 J-Link；换下载器改 stlink / cmsis-dap
 ```
 
 判定：OpenOCD 打印 `** Verified OK **` 和 `** Resetting Target **`。

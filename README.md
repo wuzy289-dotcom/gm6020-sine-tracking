@@ -90,26 +90,26 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-产物：`build/Debug/gm6020_sine.elf`。
+产物：`build/gm6020_sine.elf`。
 
 烧录（OpenOCD，按你的下载器选 interface）：
 
 ```bash
 # ST-Link
 openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
-  -c "program build/Debug/gm6020_sine.elf verify reset exit"
+  -c "program build/gm6020_sine.elf verify reset exit"
 
 # J-Link
 openocd -f interface/jlink.cfg -f target/stm32f4x.cfg \
-  -c "program build/Debug/gm6020_sine.elf verify reset exit"
+  -c "program build/gm6020_sine.elf verify reset exit"
 
 # CMSIS-DAP (DAP-Link)
 openocd -f interface/cmsis-dap.cfg -f target/stm32f4x.cfg \
-  -c "program build/Debug/gm6020_sine.elf verify reset exit"
+  -c "program build/gm6020_sine.elf verify reset exit"
 ```
 
-也可以用仓库里的脚本：`powershell -File tools/flash.ps1`（默认 J-Link，
-换下载器就加 `-Interface stlink` 或 `-Interface cmsis-dap`）。
+也可以用仓库里的脚本：`tools\flash.cmd`（默认 J-Link，
+换下载器就加 `-Interface stlink` 或 `-Interface cmsis-dap`；它内部用 `-ExecutionPolicy Bypass` 绕过执行策略）。
 
 ## 五、上位机曲线与截图
 
@@ -165,12 +165,16 @@ Core/Src/Pid.cpp           位置式 PID（条件积分抗饱和 + 微分低通�
 Core/Inc/*.h               对应头文件
 tools/plot_live.py         串口实时曲线 + 截图
 tools/sim_control.py       离线闭环仿真（验证参数方向）
-tools/flash.ps1            一键编译 + 烧录
+tools/flash.ps1            一键编译 + 烧录（PowerShell 版）
+tools/flash.cmd            同上，双击/直接运行的包装器
 figures/                   曲线图
 ```
 
-`Core/Src/*.c` 由 STM32CubeMX 从 `C_project.ioc` 生成，重新生成不会覆盖
-`ControlTask.cpp` 等手写文件；新增源文件加在根 `CMakeLists.txt` 的 `target_sources` 里。
+`Core/Src/*.c` 由 STM32CubeMX 从 `C_project.ioc` 生成，重新生成不会覆盖 `ControlTask.cpp` 等手写文件。
+
+构建用的是组里的 CMake 模板：它用 `GLOB_RECURSE` 自动收集 `Core/` 和 `Tasks/` 下的源文件，
+所以**新增 .c/.cpp 不需要再改 CMakeLists**，放进这两个目录即可（所在目录也会自动加入 include 路径）。
+自己的代码建议放到 `Tasks/` 下，让 `Core/` 保持"CubeMX 专属"。
 
 ## 九、离线仿真预览（非实测）
 

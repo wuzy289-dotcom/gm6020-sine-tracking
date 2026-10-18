@@ -342,7 +342,7 @@ void ControlTaskLoop(void) {
 }
 
 void MainTask(void) {
-    ++g_task_tick;
+    g_task_tick = g_task_tick + 1u;   // C++20 下 ++ 作用于 volatile 已弃用
     HandleKey();
     RunControl();
     CanSend();

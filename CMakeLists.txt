@@ -1,77 +1,162 @@
+# ##############################################################################
+# #################        CMake Template (CUSTOM)       ######################
+# #################    Copyright (c) 2026 Hello World    ######################
+# ##############################################################################
+
+# Set the system name and version
+set(CMAKE_SYSTEM_VERSION 1)
+
+# Specify the minimum required version of CMake
 cmake_minimum_required(VERSION 3.22)
 
-#
-# This file is generated only once,
-# and is not re-generated if converter is called multiple times.
-#
-# User is free to modify the file as much as necessary
-#
+include("cmake/gcc-arm-none-eabi.cmake")
 
-# Setup compiler settings
+# Set the C++ and C standards
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
+# Set the library path
+set(CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/build)
 
-# Define the build type
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Debug")
-endif()
+# ########################## USER CONFIG SECTION ##############################
+# Set the project name and the languages used
+project(gm6020_sine C CXX ASM) # TODO: change project name here
 
-# Set the project name
-set(CMAKE_PROJECT_NAME gm6020_sine)
+# Specify user folders
+set(user_folders "Tasks") # TODO Add your own user folders here
 
-# Enable compile command to ease indexing with e.g. clangd
-set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
+# Specify the path to the HW-Components directory
+# set(HWC_DIR "HW-Components") # TODO: Set your own HW-Components path here
 
-# Core project settings
-project(${CMAKE_PROJECT_NAME})
-message("Build type: " ${CMAKE_BUILD_TYPE})
+# # Include utility functions and default configuration
+# include("${HWC_DIR}/cmake/utils/function_tools.cmake")
+# include("${HWC_DIR}/config.cmake") # Default configuration
 
-# Enable CMake support for ASM and C languages
-enable_language(C ASM)
+# TODO: Overwrite default configuration instead of changing it in file
+# tools
+# set(use_hwcomponents_tools ON)
+# set(use_prebuilt_hwcomponents_tools OFF)
+# set(... ON)
 
-# C++ 只用来写控制层(类封装), 关掉异常/RTTI 等用不到的重型特性, 控制 Flash 占用
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics")
+# TODO: Add your own `config.cmake` file or set your own configuration here
 
-# Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME})
+# Enable preprocessing for assembler files
+add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-x$<SEMICOLON>assembler-with-cpp>)
 
-# Add STM32CubeMX generated sources
+# Disable some warnings
+set(COM_FLAGS "-Wno-unused-parameter -Wno-missing-field-initializers -Wno-pedantic -Wno-unknown-pragmas -Wno-comment")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COM_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COM_FLAGS} -Wno-reorder")
+
+##ADD_FUNCTIONS
+function(search_incs_recurse root_dir res_list)
+  get_filename_component(root_name ${root_dir} NAME)
+  set(_${root_name}_incs ${root_dir})
+  file(
+    GLOB children
+    RELATIVE ${root_dir}
+    ${root_dir}/*)
+  foreach(child ${children})
+    set(sub_dir ${root_dir}/${child})
+    if(IS_DIRECTORY ${sub_dir})
+      get_filename_component(child_name ${child} NAME)
+      set(__${child_name}_incs)
+      search_incs_recurse(${sub_dir} __${child_name}_incs)
+      list(APPEND _${root_name}_incs ${__${child_name}_incs})
+    endif()
+  endforeach()
+  set(${res_list}
+      ${_${root_name}_incs}
+      PARENT_SCOPE)
+  return()
+endfunction()
+##
+
+# #################### ADD LIBRARIES AND EXECUTABLE SECTION ####################
+# Initialize source and include lists
+set(project_srcs)
+set(project_incs)
+
+# Search for include files and source files in the Core directory
+search_incs_recurse("${CMAKE_CURRENT_SOURCE_DIR}/Core" core_incs)
+file(GLOB_RECURSE core_srcs "Core/*.*")
+# 排除所有形如 system_stm32*.c 的文件，提升通用性
+# TODO:若使用低版本的cubemx，需要将这两行注释掉
+file(GLOB EXCLUDE_SYSTEM_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/system_stm32*.c")
+list(REMOVE_ITEM core_srcs ${EXCLUDE_SYSTEM_SRC_FILES})
+
+list(APPEND project_srcs ${core_srcs})
+list(APPEND project_incs ${core_incs})
+
+# Search for include files and source files in the Drivers directory
+search_incs_recurse("${CMAKE_CURRENT_SOURCE_DIR}/Drivers" drivers_incs)
+file(GLOB_RECURSE drivers_srcs "Drivers/*.*")
+list(APPEND project_incs ${drivers_incs})
+
+# For each user folder, search for include files and source files
+foreach(user_folder ${user_folders})
+  search_incs_recurse("${CMAKE_CURRENT_SOURCE_DIR}/${user_folder}"
+                      ${user_folder}_incs)
+  file(GLOB_RECURSE ${user_folder}_srcs "${user_folder}/*.*")
+  list(APPEND project_incs ${${user_folder}_incs})
+  list(APPEND project_srcs ${${user_folder}_srcs})
+endforeach()
+
+# Add a static library for the drivers
+add_library(drivers STATIC ${drivers_srcs})
+target_include_directories(drivers PUBLIC ${core_incs} ${drivers_incs})
+
+# Add an executable for the project
+file(GLOB_RECURSE startup_file "*.s")
+add_executable(${PROJECT_NAME} ${project_srcs} ${startup_file})
+message(STATUS "Project name: ${PROJECT_NAME}")
+
 add_subdirectory(cmake/stm32cubemx)
+get_target_property(STM32_COMPILE_DEFINES stm32cubemx INTERFACE_COMPILE_DEFINITIONS)
+list(APPEND STM32_COMPILE_DEFINES DEBUG) # Add DEBUG definition
+foreach(STM32_COMPILE_DEFINE ${STM32_COMPILE_DEFINES})
+  # Exclude the element if it starts with "$"
+  if(STM32_COMPILE_DEFINE MATCHES "^\\$")
+    continue()
+  endif()
+  add_definitions(-D${STM32_COMPILE_DEFINE})
 
-# Link directories setup
-target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined library search paths
-)
+  # Get HAL filename
+  if(STM32_COMPILE_DEFINE MATCHES "STM32[A-Z][0-9]")
+    string(SUBSTRING ${STM32_COMPILE_DEFINE} 0 7 STM32_DEVICE)
+    string(TOLOWER ${STM32_DEVICE} stm32_hal_filename)
+    string(CONCAT stm32_hal_filename ${stm32_hal_filename} "xx_hal.h")
+    message(STATUS "HAL file name: ${stm32_hal_filename}")
+    # Set macro for the HAL filename
+    add_definitions(-DSTM32_HAL_FILENAME="${stm32_hal_filename}")
+  endif()
+endforeach()
 
-# Add sources to executable
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # 控制层: 电机协议 / PID / 任务调度
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/Gm6020.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/Pid.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ControlTask.cpp
-)
+# Add the HW-Components directory as a subdirectory
+# add_subdirectory(${HWC_DIR})
 
-# Add include paths
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined include paths
-)
+# Add the project includes to the executable
+target_include_directories(${PROJECT_NAME} PUBLIC ${project_incs})
+target_include_directories(${PROJECT_NAME} PUBLIC ${${HWC_LIB_PREFIX}_incs})
 
-# Add project symbols (macros)
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
-)
+# Link the drivers library and the HW-Components library to the executable
+target_link_libraries(${PROJECT_NAME}  drivers)
+target_link_libraries(${PROJECT_NAME}  ${${HWC_LIB_PREFIX}_libs})
 
-# Remove wrong libob.a library dependency when using cpp files
-list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
+# Define the output hex and bin files
+set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
+set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)
 
-# Add linked libraries
-target_link_libraries(${CMAKE_PROJECT_NAME}
-    stm32cubemx
-    m          # sinf/cosf
-
-    # Add user defined libraries
-)
+# Add a post-build command to generate the hex and bin files
+add_custom_command(
+  TARGET ${PROJECT_NAME}
+  POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${PROJECT_NAME}> ${HEX_FILE}
+  COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}>
+          ${BIN_FILE}
+  COMMENT "Building ${HEX_FILE} Building ${BIN_FILE}")
