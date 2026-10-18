@@ -113,6 +113,30 @@ openocd -f interface/cmsis-dap.cfg -f target/stm32f4x.cfg \
 
 ## 五、上位机曲线与截图
 
+出图有两条路，任选其一（都很适合交作业，Ozone 那条不需要额外硬件）。
+
+### 方式 A：Ozone 的 Timeline（基地常用，只靠 J-Link）
+
+代码里专门留了 4 个全局变量给调试器看，它们用 `extern "C"` + `volatile` 声明，
+符号名干净、不会被优化掉（定义在 `Tasks/ControlTask.cpp` 顶部）：
+
+| 变量 | 含义 | 单位 |
+|---|---|---|
+| `g_dbg_ref` | 当前给定 | 速度模式 rpm / 位置模式 度 |
+| `g_dbg_fdb` | 当前反馈 | 同上 |
+| `g_dbg_u` | 当前输出电压给定 | -25000 ~ 25000 |
+| `g_dbg_mode` | 0 = 速度模式，1 = 位置模式 | — |
+
+操作顺序：
+
+1. Ozone → `File → Open`，选 `build/gm6020_sine.elf`；Device 选 `STM32F407IG`，Interface 选 J-Link
+2. `Download & Run` 烧录并全速运行（不要停住，停住就没有数据）
+3. 打开 `View → Timeline`，把 `g_dbg_ref`、`g_dbg_fdb` 拖进去（想看控制量再加 `g_dbg_u`）
+4. 采样周期设 **10 ms** 左右——信号是 0.2 Hz，10 ms 采一个点一个周期还有 500 点，够用
+5. 跑 15~20 s 截一张（速度环），短按板载 KEY 切到位置模式（蓝灯）再截一张
+
+### 方式 B：串口 + Python 脚本（需要 USB-TTL）
+
 固件在 USART1 上每 2 ms 发一行 ASCII：`ref,fdb\r\n`
 
 - 速度模式：单位 rpm
@@ -131,6 +155,9 @@ python tools/plot_live.py --port COM5 --mode position --seconds 35 --out figures
 
 串口助手（VOFA+ / SerialPlot）也能直接看，选择 `256000, 8N1`，
 两通道 CSV 即可。
+
+> 两条路用的是同一个 `g_dbg_*` 数据源，Ozone 那条不依赖串口，所以基地没有
+> USB-TTL 也能出图。
 
 ## 六、板载指示
 

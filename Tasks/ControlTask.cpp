@@ -25,6 +25,18 @@
 #include <cmath>
 #include <cstring>
 
+// ---------------------------------------------------------------------------
+// 给调试器(Ozone Timeline / Live Watch)观察的全局量:
+// 放全局命名空间 + extern "C" + volatile, 符号名就是 g_dbg_xxx,
+// 既不会被优化掉, 在 Ozone 里也能直接按名字搜到。
+// ---------------------------------------------------------------------------
+extern "C" {
+volatile float   g_dbg_ref  = 0.0f;   // 当前给定 (速度: rpm / 位置: 度)
+volatile float   g_dbg_fdb  = 0.0f;   // 当前反馈 (同上)
+volatile float   g_dbg_u    = 0.0f;   // 当前输出电压给定 (-25000 ~ 25000)
+volatile uint8_t g_dbg_mode = 0u;     // 0 = 速度模式, 1 = 位置模式
+}
+
 namespace {
 
 constexpr float kPi       = 3.14159265359f;
@@ -80,9 +92,6 @@ volatile bool     g_motor_seen  = false;  // 是否收到过反馈
 bool  g_mode_position = false;            // false=速度模式 true=位置模式
 float g_t             = 0.0f;             // 进入当前模式后的时间(s)
 float g_theta0        = 0.0f;             // 进入位置模式时的角度(rad)
-float g_ref_out       = 0.0f;             // 上报用给定
-float g_fdb_out       = 0.0f;             // 上报用反馈
-
 uint16_t g_tele_div    = 0;
 uint16_t g_key_hold_ms = 0;
 uint8_t  g_tx_idx      = 0;
@@ -205,9 +214,9 @@ void TelemetryTick(void) {
 
     char *buf = g_tx_buf[g_tx_idx];
     int   n   = 0;
-    n += AppendFixed(buf + n, g_ref_out, 2);
+    n += AppendFixed(buf + n, g_dbg_ref, 2);
     buf[n++] = ',';
-    n += AppendFixed(buf + n, g_fdb_out, 2);
+    n += AppendFixed(buf + n, g_dbg_fdb, 2);
     buf[n++] = '\r';
     buf[n++] = '\n';
 
@@ -223,7 +232,7 @@ void SwitchMode(bool position_mode) {
     g_mode_position = position_mode;
     g_t      = 0.0f;
     g_theta0 = g_motor.angle();    // 位置模式以当前角度为中心, 避免上电跳变
-    g_ref_out = 0.0f;
+    g_dbg_ref = 0.0f;
     g_spd_pid.reset();
     g_pos_pid.reset();
 }
@@ -270,8 +279,8 @@ void RunControl(void) {
         // 掉线保护: 输出清零, 清 PID, 红灯 2Hz 闪
         g_spd_pid.reset();
         g_pos_pid.reset();
-        g_ref_out = 0.0f;
-        g_fdb_out = g_mode_position ? (g_motor.angle() - g_theta0) * kRadToDeg
+        g_dbg_ref = 0.0f;
+        g_dbg_fdb = g_mode_position ? (g_motor.angle() - g_theta0) * kRadToDeg
                                     : static_cast<float>(g_motor.velRpm());
         Led(false, false, (now % 500u) < 250u);
     } else if (!g_mode_position) {
@@ -282,8 +291,8 @@ void RunControl(void) {
 
         u = cfg::kVoltPerRpm * w_ref + g_spd_pid.calc(w_ref, w_fb);
 
-        g_ref_out = w_ref;
-        g_fdb_out = w_fb;
+        g_dbg_ref = w_ref;
+        g_dbg_fdb = w_fb;
         Led(false, true, false);                       // 绿灯常亮 = 速度模式
     } else {
         // ---- 位置环: 给定 rad 正弦, 位置 P(D) -> 速度给定 -> 速度环 ----
@@ -303,8 +312,8 @@ void RunControl(void) {
         const float w_fb_rpm  = static_cast<float>(g_motor.velRpm());
         u = cfg::kVoltPerRpm * w_ref_rpm + g_spd_pid.calc(w_ref_rpm, w_fb_rpm);
 
-        g_ref_out = (th_ref - g_theta0) * kRadToDeg;   // 上报相对角度(度)
-        g_fdb_out = (th_fb  - g_theta0) * kRadToDeg;
+        g_dbg_ref = (th_ref - g_theta0) * kRadToDeg;   // 上报相对角度(度)
+        g_dbg_fdb = (th_fb  - g_theta0) * kRadToDeg;
         Led(true, false, false);                       // 蓝灯常亮 = 位置模式
     }
 
@@ -312,6 +321,8 @@ void RunControl(void) {
     if (u >  cfg::kVoltLimit) u =  cfg::kVoltLimit;
     if (u < -cfg::kVoltLimit) u = -cfg::kVoltLimit;
 
+    g_dbg_u    = u;                                     // 给 Ozone 看控制量
+    g_dbg_mode = g_mode_position ? 1u : 0u;
     g_motor.setVoltage(static_cast<int16_t>(u));
 }
 

@@ -35,7 +35,13 @@ tools\flash.cmd -Interface jlink     # 基地用 J-Link；换下载器改 stlink
 
 判定：OpenOCD 打印 `** Verified OK **` 和 `** Resetting Target **`。
 
+也可以在 Ozone 里烧：`File → Open` 选 `build/gm6020_sine.elf`，Device 选 STM32F407IG，
+然后 `Download & Run`（务必是全速运行，停住就没有数据）。
+
 ## 4. 串口自检（关键一步）
+
+没有 USB-TTL 就直接用 Ozone：把 `g_dbg_fdb` 加进 Live Watch（或 Timeline），
+手转电机看数值变化——能看到非零转速就说明 CAN 通了。
 
 ```bash
 python tools/plot_live.py --port COM5 --print-only
@@ -58,6 +64,9 @@ python tools/plot_live.py --port COM5 --print-only
 ## 6. 速度环
 
 默认参数就能跑：`±100 rpm, 0.2 Hz`。
+
+截图可以直接截 Ozone 的 Timeline（把 `g_dbg_ref`、`g_dbg_fdb` 拖进去，
+采样周期 10 ms，跑满 3 个正弦周期），也可以走下面的脚本。
 
 ```bash
 python tools/plot_live.py --port COM5 --mode speed --seconds 25 --out figures/speed_follow.png
