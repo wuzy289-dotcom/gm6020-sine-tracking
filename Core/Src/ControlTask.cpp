@@ -170,6 +170,7 @@ int AppendFixed(char *dst, float v, int dec) {
     const uint32_t q  = static_cast<uint32_t>(v * static_cast<float>(scale) + 0.5f);
     uint32_t ip = q / scale;
     uint32_t fp = q % scale;
+    if (q == 0u) neg = false;   // 避免输出 "-0.00"
 
     char tmp[24];
     int  n = 0;
