@@ -3,7 +3,7 @@
 #   powershell -File tools/flash.ps1 -Interface jlink -BuildOnly
 param(
     [ValidateSet('stlink', 'jlink', 'cmsis-dap')]
-    [string]$Interface = 'stlink',
+    [string]$Interface = 'jlink',
     [switch]$BuildOnly
 )
 

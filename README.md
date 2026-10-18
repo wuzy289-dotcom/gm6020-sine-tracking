@@ -108,7 +108,8 @@ openocd -f interface/cmsis-dap.cfg -f target/stm32f4x.cfg \
   -c "program build/Debug/gm6020_sine.elf verify reset exit"
 ```
 
-也可以用仓库里的脚本：`powershell -File tools/flash.ps1 -Interface stlink`。
+也可以用仓库里的脚本：`powershell -File tools/flash.ps1`（默认 J-Link，
+换下载器就加 `-Interface stlink` 或 `-Interface cmsis-dap`）。
 
 ## 五、上位机曲线与截图
 
